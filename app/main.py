@@ -3,9 +3,21 @@ from sqlalchemy.orm import Session
 from app.db.database import Base, engine, get_db
 from app.db import models
 from app.schemas.user import UserCreate
-from app.db.models import User
+from app.db.models import User,Room
 from app.core.security import hash_password,verify_password,get_current_user,create_access_token
 from app.schemas.user import UserCreate, UserResponse,UserLogin
+from app.schemas.room import RoomResponse
+import random,string
+
+
+
+def generate_room_code():
+    return ''.join(
+        random.choices(
+            string.ascii_uppercase + string.digits,
+            k=6
+        )
+    )
 
 Base.metadata.create_all(bind=engine)
 
@@ -56,3 +68,19 @@ def login(user: UserLogin, db: Session = Depends(get_db)):
 @app.get("/me", response_model=UserResponse)
 def get_me(current_user: User = Depends(get_current_user)):
     return current_user
+
+@app.post("/rooms", response_model=RoomResponse)
+def create_room(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    room = Room(
+        room_code=generate_room_code(),
+        host_id=current_user.id
+    )
+
+    db.add(room)
+    db.commit()
+    db.refresh(room)
+
+    return room
