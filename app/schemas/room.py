@@ -8,6 +8,7 @@ class RoomResponse(BaseModel):
     host_id: int
     created_at: datetime
     is_active: bool
+    max_members: int
 
     class Config:
         from_attributes = True
@@ -17,3 +18,4 @@ class RoomMemberResponse(BaseModel):
     user_id: int
     username: str
     joined_at: datetime
+

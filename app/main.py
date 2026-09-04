@@ -8,7 +8,7 @@ from app.schemas.user import UserCreate
 from app.db.models import RoomMember, User,Room
 from app.core.security import hash_password,verify_password,get_current_user,create_access_token
 from app.schemas.user import UserCreate, UserResponse,UserLogin
-from app.schemas.room import RoomResponse,RoomMemberResponse
+from app.schemas.room import RoomResponse, RoomMemberResponse
 import random,string
 
 
@@ -94,13 +94,14 @@ def create_room(
 ):
     room = Room(
         room_code=generate_room_code(),
-        host_id=current_user.id
+        host_id=current_user.id,
+        max_members=10
     )
 
     db.add(room)
     db.flush()
 
-    member = RoomMember(  #Adding host to his created room
+    member = RoomMember(
         room_id=room.id,
         user_id=current_user.id
     )
@@ -142,6 +143,16 @@ def join_room(
         raise HTTPException(
             status_code=400,
             detail="User is already a member of this room"
+        )
+
+    member_count = db.query(RoomMember).filter(
+        RoomMember.room_id == room.id
+    ).count()
+
+    if member_count >= room.max_members:
+        raise HTTPException(
+            status_code=400,
+            detail="Room is full"
         )
 
     member = RoomMember(
@@ -245,3 +256,128 @@ def get_room_members(
         )
         for member, user in members
     ]
+def get_room_member(
+    room_code: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    room = db.query(Room).filter(
+        Room.room_code == room_code
+    ).first()
+
+    if room is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Room not found"
+        )
+
+    if not room.is_active:
+        raise HTTPException(
+            status_code=400,
+            detail="Room is inactive"
+        )
+
+    member = db.query(RoomMember).filter(
+        RoomMember.room_id == room.id,
+        RoomMember.user_id == current_user.id
+    ).first()
+
+    if member is None:
+        raise HTTPException(
+            status_code=403,
+            detail="User is not a member of this room"
+        )
+
+    return room
+
+
+@app.get(
+    "/rooms/{room_code}/members",
+    response_model=list[RoomMemberResponse]
+)
+def get_room_members(
+    room: Room = Depends(get_room_member),
+    db: Session = Depends(get_db)
+):
+    members = (
+        db.query(RoomMember, User)
+        .join(
+            User,
+            RoomMember.user_id == User.id
+        )
+        .filter(RoomMember.room_id == room.id)
+        .all()
+    )
+
+    return [
+        RoomMemberResponse(
+            user_id=user.id,
+            username=user.username,
+            joined_at=member.joined_at
+        )
+        for member, user in members
+    ]
+
+
+@app.get(
+    "/rooms/{room_code}",
+    response_model=RoomResponse
+)
+def get_room(
+    room: Room = Depends(get_room_member)
+):
+    return room
+
+@app.delete("/rooms/{room_code}/members/{user_id}")
+def remove_room_member(
+    room_code: str,
+    user_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    room = db.query(Room).filter(
+        Room.room_code == room_code
+    ).first()
+
+    if room is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Room not found"
+        )
+
+    if not room.is_active:
+        raise HTTPException(
+            status_code=400,
+            detail="Room is inactive"
+        )
+
+    if room.host_id != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="Only the host can remove members"
+        )
+
+    if user_id == current_user.id:
+        raise HTTPException(
+            status_code=400,
+            detail="Host cannot remove themselves"
+        )
+
+    member = db.query(RoomMember).filter(
+        RoomMember.room_id == room.id,
+        RoomMember.user_id == user_id
+    ).first()
+
+    if member is None:
+        raise HTTPException(
+            status_code=404,
+            detail="User is not a member of this room"
+        )
+
+    db.delete(member)
+    db.commit()
+
+    return {
+        "message": "Member removed successfully",
+        "user_id": user_id
+    }
