@@ -1,16 +1,27 @@
-from enum import member
+from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.security import OAuth2PasswordRequestForm
-from fastapi import FastAPI, Depends, HTTPException
+
 from sqlalchemy.orm import Session
-from app.db.database import Base, engine, get_db
+
+from app.db.database import Base, engine, get_db,SessionLocal
 from app.db import models
-from app.schemas.user import UserCreate
-from app.db.models import RoomMember, User,Room
-from app.core.security import hash_password,verify_password,get_current_user,create_access_token
-from app.schemas.user import UserCreate, UserResponse,UserLogin
+from app.db.models import RoomMember, User, Room
+
+from app.schemas.user import UserCreate, UserResponse, UserLogin
 from app.schemas.room import RoomResponse, RoomMemberResponse
+
+from app.core.security import (
+    hash_password,
+    verify_password,
+    get_current_user,
+    create_access_token,
+    decode_access_token
+)
+from app.websocket.manager import ConnectionManager
 import random,string
 
+
+manager = ConnectionManager()
 
 
 def generate_room_code():
@@ -381,3 +392,66 @@ def remove_room_member(
         "message": "Member removed successfully",
         "user_id": user_id
     }
+
+@app.websocket("/ws/{room_code}")
+async def websocket_endpoint(
+    websocket: WebSocket,
+    room_code: str,
+    token: str
+):
+    payload = decode_access_token(token)
+
+    if payload is None:
+        await websocket.close(code=1008)
+        return
+
+    username = payload.get("sub")
+
+    if username is None:
+        await websocket.close(code=1008)
+        return
+
+    db = SessionLocal()
+
+    try:
+        user = db.query(User).filter(
+            User.username == username
+        ).first()
+
+        if user is None:
+            await websocket.close(code=1008)
+            return
+
+        room = db.query(Room).filter(
+            Room.room_code == room_code
+        ).first()
+
+        if room is None:
+            await websocket.close(code=1008)
+            return
+
+        member = db.query(RoomMember).filter(
+            RoomMember.room_id == room.id,
+            RoomMember.user_id == user.id
+        ).first()
+
+        if member is None:
+            await websocket.close(code=1008)
+            return
+
+        await manager.connect(room_code, websocket)
+
+        try:
+            while True:
+                message = await websocket.receive_text()
+
+                await manager.broadcast(
+                    room_code,
+                    message
+                )
+
+        except WebSocketDisconnect:
+            manager.disconnect(room_code, websocket)
+
+    finally:
+        db.close()
