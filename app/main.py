@@ -2,13 +2,21 @@ from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconn
 from fastapi.security import OAuth2PasswordRequestForm
 
 from sqlalchemy.orm import Session
+from pydantic import ValidationError
 
-from app.db.database import Base, engine, get_db,SessionLocal
-from app.db import models
+from app.db.database import Base, engine, get_db, SessionLocal
 from app.db.models import RoomMember, User, Room
 
 from app.schemas.user import UserCreate, UserResponse, UserLogin
 from app.schemas.room import RoomResponse, RoomMemberResponse
+from app.schemas.websocket import (
+    ChatMessage,
+    PlayMessage,
+    PauseMessage,
+    SeekMessage
+)
+
+from pydantic import ValidationError
 
 from app.core.security import (
     hash_password,
@@ -230,43 +238,7 @@ def leave_room(
         "message": "Left room successfully"
     }
 
-@app.get("/rooms/{room_code}/members", response_model=list[RoomMemberResponse])
-def get_room_members(
-    room_code: str,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    room = db.query(Room).filter(
-        Room.room_code == room_code
-    ).first()
 
-    if room is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Room not found"
-        )
-
-    if not room.is_active:
-        raise HTTPException(
-            status_code=400,
-            detail="Room is inactive"
-        )
-
-    members = (
-        db.query(RoomMember, User)
-        .join(User, RoomMember.user_id == User.id)
-        .filter(RoomMember.room_id == room.id)
-        .all()
-    )
-
-    return [
-        RoomMemberResponse(
-            user_id=user.id,
-            username=user.username,
-            joined_at=member.joined_at
-        )
-        for member, user in members
-    ]
 def get_room_member(
     room_code: str,
     current_user: User = Depends(get_current_user),
@@ -443,11 +415,38 @@ async def websocket_endpoint(
 
         try:
             while True:
-                message = await websocket.receive_text()
+                data = await websocket.receive_json()
+
+                try:
+                    if data["type"] == "chat":
+                        message = ChatMessage(**data)
+
+                    elif data["type"] == "play":
+                        message = PlayMessage(**data)
+
+                    elif data["type"] == "pause":
+                        message = PauseMessage(**data)
+
+                    elif data["type"] == "seek":
+                        message = SeekMessage(**data)
+
+                    else:
+                        await websocket.send_json({
+                            "type": "error",
+                            "message": "Unknown event type"
+                        })
+                        continue
+
+                except (ValidationError, KeyError):
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": "Invalid message format"
+                    })
+                    continue
 
                 await manager.broadcast(
                     room_code,
-                    message
+                    message.model_dump()
                 )
 
         except WebSocketDisconnect:
