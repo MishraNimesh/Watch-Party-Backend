@@ -9,13 +9,8 @@ from app.db.models import RoomMember, User, Room
 
 from app.schemas.user import UserCreate, UserResponse, UserLogin
 from app.schemas.room import RoomResponse, RoomMemberResponse
-from app.schemas.websocket import (
-    ChatMessage,
-    PlayMessage,
-    PauseMessage,
-    SeekMessage
-)
 
+from app.websocket.handlers import validate_message
 from pydantic import ValidationError
 
 from app.core.security import (
@@ -418,26 +413,16 @@ async def websocket_endpoint(
                 data = await websocket.receive_json()
 
                 try:
-                    if data["type"] == "chat":
-                        message = ChatMessage(**data)
+                    message = validate_message(data)
 
-                    elif data["type"] == "play":
-                        message = PlayMessage(**data)
-
-                    elif data["type"] == "pause":
-                        message = PauseMessage(**data)
-
-                    elif data["type"] == "seek":
-                        message = SeekMessage(**data)
-
-                    else:
+                    if message is None:
                         await websocket.send_json({
                             "type": "error",
                             "message": "Unknown event type"
                         })
                         continue
 
-                except (ValidationError, KeyError):
+                except ValidationError:
                     await websocket.send_json({
                         "type": "error",
                         "message": "Invalid message format"
